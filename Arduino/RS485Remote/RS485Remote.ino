@@ -6,6 +6,16 @@
  * Upload settings:
  *   Board: Arduino Nano
  *   CPU: ATmega328P
+ *   
+ * message to remote:
+ *   bit 0..1 channel 0 antenna no
+ *   bit 2..3 channel 1 antenna no
+ *   bit 4..7 slave no
+ *   
+ * message from remote:
+ *   bit 0..1 channel no
+ *   bit 2..3 antenna no
+ *   bit 4..7 slave no
  */   
 #include <SoftwareSerial.h>
 
@@ -25,18 +35,41 @@
 #define PIN_LED2 9
 #define PIN_LED1 10
 
+#define CHANNELS 2
+#define MAX_PINS_PER_CHANNEL 4
+#define END -2
+static int ledPins[CHANNELS][MAX_PINS_PER_CHANNEL] = {
+  {PIN_LED0, PIN_LED1, PIN_LED2, END}, 
+  {PIN_LED3, PIN_LED4, END}};
+
+#define SWITCHES 5
+static int switchChannelAnt[SWITCHES][2] = {
+// ch, ant 
+  {0, 0},
+  {0, 1},
+  {0, 2},
+  {1, 0},
+  {1, 1}
+};
+
 SoftwareSerial Serial1(PIN_SERIAL1_RX, PIN_SERIAL1_TX);
 
 int brightness(bool enabled) {
   return enabled ? 0 : 245;
 }
 
-void setSelectedLed(int num) {
-  analogWrite(PIN_LED0, brightness(num == 0));
-  analogWrite(PIN_LED1, brightness(num == 1));
-  analogWrite(PIN_LED2, brightness(num == 2));
-  analogWrite(PIN_LED3, brightness(num == 3));
-  analogWrite(PIN_LED4, brightness(num == 4));
+int receivedAnt[CHANNELS];
+void setSelectedLed() {
+  for (int ch = 0; ch < CHANNELS; ch++) {
+    for (int pinIdx = 0; pinIdx < MAX_PINS_PER_CHANNEL; pinIdx++) {
+      int pin = ledPins[ch][pinIdx];
+      if (pin == END) {
+        break;
+      } else {
+        analogWrite(pin, brightness(receivedAnt[ch] == pinIdx));
+      }
+    }
+  }
 }
 
 void setErrorLed() {
@@ -66,7 +99,11 @@ void setup() {
   pinMode(PIN_LED2, OUTPUT);
   pinMode(PIN_LED3, OUTPUT);
   pinMode(PIN_LED4, OUTPUT);
-  setSelectedLed(0);
+
+  for (int i = 0; i < CHANNELS; i++) {
+    receivedAnt[i] = -1;
+  }
+  setSelectedLed();
 }
 
 int getPressed() {
@@ -86,22 +123,29 @@ int getPressed() {
 }
 
 int pendingTransmitAnt = -1;
-void transmitAnt(int newAnt) {
+int pendingTransmitChannel;
+void transmitAnt(int channel, int newAnt) {
   pendingTransmitAnt = newAnt;
+  pendingTransmitChannel = channel;
   // will be picked up in next slave response
 }
 
-int receivedAnt = -1;
 void processCommand(const char* cmd) {
-  if (cmd[0] == 'A' && cmd[1] == 'N' && cmd[2] >= '0'&& cmd[2] <= '4' && cmd[3] == ';') {
+  // AN0..3 -> channel 0
+  // AN4..8 -> channel 1
+  if (cmd[0] == 'A' && cmd[1] == 'N' && cmd[2] >= '0'&& cmd[2] <= '8' && cmd[3] == ';') {
     int newAnt = cmd[2] - '0';
-    transmitAnt(newAnt);
+    if (newAnt < 4) {
+      transmitAnt(0, newAnt);
+    } else {
+      transmitAnt(1, newAnt - 4);
+    }
     Serial.print("AN");
     Serial.print(newAnt);
     Serial.print(";");
   } else if (cmd[0] == 'A' && cmd[1] == 'N' && cmd[2] == ';') {
     Serial.print("AN");
-    Serial.print(receivedAnt >= 0 ? receivedAnt : 0);
+    Serial.print(receivedAnt[0] >= 0 ? receivedAnt[0] : 0);
     Serial.print(";");
   }
 }
@@ -113,13 +157,15 @@ void loop() {
   while (Serial1.available() > 0) {
     byte masterData = Serial1.read();
     // we read any data, but respond only to our slave id
-    int newReceivedAnt = masterData & 0x0f;
-    if (newReceivedAnt != receivedAnt) {
-      receivedAnt = newReceivedAnt;
-      setSelectedLed(receivedAnt);
+    int newReceivedAnt[CHANNELS] = {masterData & 0x03, masterData & 0x0c};
+    for (int i = 0; i < CHANNELS; i++) {
+      if (newReceivedAnt[i] != receivedAnt[i]) {
+        receivedAnt[i] = newReceivedAnt[i];
+        setSelectedLed();
+      }
     }
     if (pendingTransmitAnt >= 0 && (masterData >> 4) == SLAVE_ID) {
-      Serial1.write((uint8_t)((SLAVE_ID << 4) | (uint8_t) pendingTransmitAnt));
+      Serial1.write((uint8_t)((SLAVE_ID << 4) |  (uint8_t) (pendingTransmitChannel << 2) | (uint8_t) pendingTransmitAnt));
       pendingTransmitAnt = -1;
     }
     lastMasterMessage = millis();
@@ -129,8 +175,12 @@ void loop() {
     setErrorLed();
   } else {
     int pressed = getPressed();
-    if (pressed >= 0 && pressed != receivedAnt) {
-      transmitAnt(pressed);
+    if (pressed >= 0) {
+      int txChannel = switchChannelAnt[pressed][0];
+      int txAnt     = switchChannelAnt[pressed][1];
+      if (txAnt != receivedAnt[txChannel]) {
+        transmitAnt(txChannel, txAnt);
+      }
     }
   
     while (Serial.available() > 0) {
