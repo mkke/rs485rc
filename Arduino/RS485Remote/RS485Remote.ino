@@ -24,16 +24,16 @@
 #define PIN_SERIAL1_RX 3
 #define PIN_SERIAL1_TX 4
 
-#define PIN_SW0  A0
+#define PIN_SW3  A0
 #define PIN_SW4  A1
-#define PIN_SW3  A2
-#define PIN_SW2  A3
-#define PIN_SW1  A4
-#define PIN_LED0 6
+#define PIN_SW0  A2
+#define PIN_SW1  A3
+#define PIN_SW2  A4
+#define PIN_LED3 6
 #define PIN_LED4 5
-#define PIN_LED3 11
-#define PIN_LED2 9
-#define PIN_LED1 10
+#define PIN_LED0 11
+#define PIN_LED1 9
+#define PIN_LED2 10
 
 #define CHANNELS 2
 #define MAX_PINS_PER_CHANNEL 4
@@ -55,7 +55,7 @@ static int switchChannelAnt[SWITCHES][2] = {
 SoftwareSerial Serial1(PIN_SERIAL1_RX, PIN_SERIAL1_TX);
 
 int brightness(bool enabled) {
-  return enabled ? 0 : 245;
+  return enabled ? 240 : 254;
 }
 
 int receivedAnt[CHANNELS];
@@ -157,7 +157,7 @@ void loop() {
   while (Serial1.available() > 0) {
     byte masterData = Serial1.read();
     // we read any data, but respond only to our slave id
-    int newReceivedAnt[CHANNELS] = {masterData & 0x03, masterData & 0x0c};
+    int newReceivedAnt[CHANNELS] = {masterData & 0x03, (masterData & 0x0c) >> 2};
     for (int i = 0; i < CHANNELS; i++) {
       if (newReceivedAnt[i] != receivedAnt[i]) {
         receivedAnt[i] = newReceivedAnt[i];
@@ -165,7 +165,7 @@ void loop() {
       }
     }
     if (pendingTransmitAnt >= 0 && (masterData >> 4) == SLAVE_ID) {
-      Serial1.write((uint8_t)((SLAVE_ID << 4) |  (uint8_t) (pendingTransmitChannel << 2) | (uint8_t) pendingTransmitAnt));
+      Serial1.write((uint8_t)((SLAVE_ID << 4) |  (uint8_t) (pendingTransmitAnt << 2) | (uint8_t) pendingTransmitChannel));
       pendingTransmitAnt = -1;
     }
     lastMasterMessage = millis();
